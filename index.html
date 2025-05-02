@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Washington EV Registration Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      padding: 20px;
+      max-width: 1200px;
+      margin: 0 auto;
+      color: #333;
+    }
+    h2 {
+      text-align: center;
+      color: #2c3e50;
+      margin-bottom: 30px;
+    }
+    .chart-container {
+      position: relative;
+      margin: 40px auto;
+      width: 100%;
+      max-width: 1000px;
+    }
+    canvas {
+      width: 100% !important;
+      height: auto !important;
+    }
+    .controls {
+      text-align: center;
+      margin: 20px 0;
+    }
+    button {
+      background-color: #3498db;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      margin: 0 5px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    button:hover {
+      background-color: #2980b9;
+    }
+    .loading {
+      text-align: center;
+      font-style: italic;
+      color: #7f8c8d;
+    }
+    .error {
+      color: #e74c3c;
+      text-align: center;
+      font-weight: bold;
+    }
+    .filters {
+      display: flex;
+      justify-content: center;
+      gap: 15px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    select {
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+    }
+  </style>
+</head>
+<body>
+  <h2>Washington State Electric Vehicle Registrations</h2>
+  
+  <div class="filters">
+    <div>
+      <label for="countyFilter">County:</label>
+      <select id="countyFilter">
+        <option value="all">All Counties</option>
+      </select>
+    </div>
+    <div>
+      <label for="makeFilter">Make:</label>
+      <select id="makeFilter">
+        <option value="all">All Makes</option>
+      </select>
+    </div>
+    <div>
+      <label for="yearFilter">Model Year:</label>
+      <select id="yearFilter">
+        <option value="all">All Years</option>
+      </select>
+    </div>
+  </div>
+  
+  <div class="controls">
+    <button id="sortAsc">Sort Ascending</button>
+    <button id="sortDesc">Sort Descending</button>
+    <button id="resetSort">Reset Sort</button>
+  </div>
+  
+  <div class="chart-container">
+    <canvas id="evChart"></canvas>
+  </div>
+  
+  <div id="loading" class="loading">Loading data...</div>
+  <div id="error" class="error" style="display: none;"></div>
+
+  <script>
+    let chart;
+    let originalData = { labels: [], values: [] };
+    let fullDataset = [];
+    let filteredData = {};
+
+    async function loadAndRenderChart() {
+      try {
+        document.getElementById('loading').style.display = 'block';
+        document.getElementById('error').style.display = 'none';
+        
+        const response = await fetch('https://data.wa.gov/api/views/f6w7-q2d2/rows.csv?accessType=DOWNLOAD');
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        const csvData = await response.text();
+        fullDataset = parseCSV(csvData);
+        
+        // Process data - count by make
+        const makeCounts = {};
+        fullDataset.forEach(vehicle => {
+          const make = vehicle.Make;
+          makeCounts[make] = (makeCounts[make] || 0) + 1;
+        });
+
+        // Sort makes alphabetically
+        const sortedMakes = Object.keys(makeCounts).sort((a, b) => a.localeCompare(b));
+        
+        // Store original data
+        originalData.labels = [...sortedMakes];
+        originalData.values = sortedMakes.map(make => makeCounts[make]);
+        filteredData = {...originalData};
+
+        // Populate filters
+        populateFilters(fullDataset);
+        
+        renderChart(filteredData.labels, filteredData.values);
+        
+      } catch (error) {
+        console.error('Error loading data:', error);
+        document.getElementById('error').style.display = 'block';
+        document.getElementById('error').textContent = `Error loading data: ${error.message}`;
+      } finally {
+        document.getElementById('loading').style.display = 'none';
+      }
+    }
+
+    function parseCSV(csvText) {
+      const lines = csvText.split('\n');
+      const headers = lines[0].split(',').map(h => h.trim());
+      
+      return lines.slice(1).map(line => {
+        const values = line.split(',');
+        return headers.reduce((obj, header, index) => {
+          obj[header] = values[index] ? values[index].trim() : '';
+          return obj;
+        }, {});
+      }).filter(row => row.Make); // Filter out empty rows
+    }
+
+    function populateFilters(data) {
+      const counties = new Set();
+      const makes = new Set();
+      const years = new Set();
+      
+      data.forEach(vehicle => {
+        if (vehicle.County) counties.add(vehicle.County);
+        if (vehicle.Make) makes.add(vehicle.Make);
+        if (vehicle['Model Year']) years.add(vehicle['Model Year']);
+      });
+      
+      // County filter
+      const countySelect = document.getElementById('countyFilter');
+      Array.from(counties).sort().forEach(county => {
+        const option = document.createElement('option');
+        option.value = county;
+        option.textContent = county;
+        countySelect.appendChild(option);
+      });
+      
+      // Make filter
+      const makeSelect = document.getElementById('makeFilter');
+      Array.from(makes).sort().forEach(make => {
+        const option = document.createElement('option');
+        option.value = make;
+        option.textContent = make;
+        makeSelect.appendChild(option);
+      });
+      
+      // Year filter
+      const yearSelect = document.getElementById('yearFilter');
+      Array.from(years).sort((a, b) => b - a).forEach(year => {
+        const option = document.createElement('option');
+        option.value = year;
+        option.textContent = year;
+        yearSelect.appendChild(option);
+      });
+      
+      // Add event listeners
+      countySelect.addEventListener('change', applyFilters);
+      makeSelect.addEventListener('change', applyFilters);
+      yearSelect.addEventListener('change', applyFilters);
+    }
+
+    function applyFilters() {
+      const county = document.getElementById('countyFilter').value;
+      const make = document.getElementById('makeFilter').value;
+      const year = document.getElementById('yearFilter').value;
+      
+      // Filter the full dataset
+      let filtered = fullDataset;
+      
+      if (county !== 'all') {
+        filtered = filtered.filter(vehicle => vehicle.County === county);
+      }
+      
+      if (make !== 'all') {
+        filtered = filtered.filter(vehicle => vehicle.Make === make);
+      }
+      
+      if (year !== 'all') {
+        filtered = filtered.filter(vehicle => vehicle['Model Year'] === year);
+      }
+      
+      // Count makes in filtered data
+      const makeCounts = {};
+      filtered.forEach(vehicle => {
+        const make = vehicle.Make;
+        makeCounts[make] = (makeCounts[make] || 0) + 1;
+      });
+      
+      // Sort makes alphabetically
+      const sortedMakes = Object.keys(makeCounts).sort((a, b) => a.localeCompare(b));
+      
+      // Update filtered data
+      filteredData.labels = [...sortedMakes];
+      filteredData.values = sortedMakes.map(make => makeCounts[make]);
+      
+      renderChart(filteredData.labels, filteredData.values);
+    }
+
+    function renderChart(labels, values) {
+      const ctx = document.getElementById('evChart').getContext('2d');
+      
+      // Destroy previous chart if exists
+      if (chart) chart.destroy();
+      
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Number of Vehicles',
+            data: values,
+            backgroundColor: 'rgba(54, 162, 235, 0.6)',
+            borderColor: 'rgba(54, 162, 235, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: 'Vehicle Make'
+              }
+            },
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'Number of Registered Vehicles'
+              }
+            }
+          },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  return `${context.parsed.y} vehicles`;
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // Sort functions
+    function sortAscending() {
+      const sortedLabels = [...filteredData.labels].sort((a, b) => a.localeCompare(b));
+      const sortedValues = sortedLabels.map(label => filteredData.values[filteredData.labels.indexOf(label)]);
+      renderChart(sortedLabels, sortedValues);
+    }
+
+    function sortDescending() {
+      const sortedLabels = [...filteredData.labels].sort((a, b) => b.localeCompare(a));
+      const sortedValues = sortedLabels.map(label => filteredData.values[filteredData.labels.indexOf(label)]);
+      renderChart(sortedLabels, sortedValues);
+    }
+
+    function resetSort() {
+      renderChart(filteredData.labels, filteredData.values);
+    }
+
+    // Event listeners
+    document.getElementById('sortAsc').addEventListener('click', sortAscending);
+    document.getElementById('sortDesc').addEventListener('click', sortDescending);
+    document.getElementById('resetSort').addEventListener('click', resetSort);
+
+    // Initialize
+    loadAndRenderChart();
+  </script>
+</body>
+</html>
